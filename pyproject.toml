@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "sparkdb-orm"
+version = "0.2.0"
+description = "Lightweight Python ORM with DB-API 2.0 and SparkDB backends"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = []
+
+[project.optional-dependencies]
+sparkdb = ["requests>=2.31.0"]
