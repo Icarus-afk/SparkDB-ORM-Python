@@ -13,11 +13,6 @@ from sparkdb.migration import Migrator
 from sparkdb.query import QuerySet
 from sparkdb import models as models
 
-try:
-    from sparkdb.client import SparkDB, AdminNamespace, validate_password_strength
-except ImportError:
-    SparkDB = None
-    AdminNamespace = None
-    validate_password_strength = None
+from sparkdb.client import SparkDB, AdminNamespace, validate_password_strength
 
 __version__ = "0.3.0"
