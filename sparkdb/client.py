@@ -15,6 +15,40 @@ from sparkdb.exceptions import *
 from sparkdb import models as m
 
 
+def validate_password_strength(password):
+    """Check if a password meets SparkDB's server-side strength policy.
+
+    Returns ``None`` if the password is acceptable, or a ``str``
+    describing the first requirement that was not met.
+
+    Requirements
+    ------------
+    * At least 8 characters
+    * At least one uppercase letter
+    * At least one lowercase letter
+    * At least one digit
+
+    Parameters
+    ----------
+    password : str
+
+    Returns
+    -------
+    str or None
+    """
+    if not password:
+        return "password is required"
+    if len(password) < 8:
+        return "password must be at least 8 characters"
+    if not any(c.isupper() for c in password):
+        return "password must contain at least one uppercase letter"
+    if not any(c.islower() for c in password):
+        return "password must contain at least one lowercase letter"
+    if not any(c.isdigit() for c in password):
+        return "password must contain at least one digit"
+    return None
+
+
 class AdminNamespace:
     """Namespace for admin-only operations on the SparkDB server.
 
@@ -366,6 +400,25 @@ class SparkDB:
         """
         return self._request("POST", "/restore", json={
             "backup_file": backup_file, "database": database,
+        })
+
+    def replication_log(self, since=0, limit=500):
+        """Fetch replication log entries (admin only).
+
+        Parameters
+        ----------
+        since : int
+            Minimum entry ID to fetch (default 0).
+        limit : int
+            Max entries to return (1-5000, default 500).
+
+        Returns
+        -------
+        dict
+            ``{"entries": [...]}``
+        """
+        return self._request("GET", "/replication/log", params={
+            "since": str(since), "limit": str(limit),
         })
 
     def health(self):
