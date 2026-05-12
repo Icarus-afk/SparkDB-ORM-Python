@@ -11,6 +11,7 @@ from sparkdb.exceptions import *
 from sparkdb.relationship import ForeignKey, has_many
 from sparkdb.migration import Migrator
 from sparkdb.query import QuerySet
+from sparkdb import models as models
 
 try:
     from sparkdb.client import SparkDB, AdminNamespace

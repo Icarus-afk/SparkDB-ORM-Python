@@ -6,12 +6,13 @@ over REST.  This module requires ``requests`` (installed via the
 """
 
 import json
-import time
+from contextlib import contextmanager
 from urllib.parse import urljoin
 
 import requests
 
 from sparkdb.exceptions import *
+from sparkdb import models as m
 
 
 class AdminNamespace:
@@ -118,33 +119,38 @@ class SparkDB:
     url : str
         Server base URL (default ``http://localhost:9600``).
     api_key : str, optional
-        API key for authentication.
+        API key for authentication (sets ``X-API-Key`` header).
     username : str, optional
         Username for JWT authentication (requires *password*).
     password : str, optional
         Password for JWT authentication (requires *username*).
+    session_token : str, optional
+        Session token for session-based authentication (sets
+        ``Authorization: Session <token>`` header).
     timeout : int
         Request timeout in seconds (default 30).
     """
 
-    def __init__(self, url="http://localhost:9600", api_key=None, username=None, password=None, timeout=30):
+    def __init__(self, url="http://localhost:9600", api_key=None,
+                 username=None, password=None, session_token=None,
+                 timeout=30):
         self.url = url.rstrip("/")
         self.timeout = timeout
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
         self._password_change_required = False
+        self._token = None
         self.admin = AdminNamespace(self)
 
         if api_key:
             self._session.headers.update({"X-API-Key": api_key})
-            self._token = None
         elif username and password:
             self._token = self._login(username, password)
             self._session.headers.update({"Authorization": f"Bearer {self._token}"})
+        elif session_token:
+            self._session.headers.update({"Authorization": f"Session {session_token}"})
         elif username or password:
             raise ValueError("both username and password are required for authentication")
-        else:
-            self._token = None
 
     @property
     def needs_password_change(self):
@@ -232,8 +238,8 @@ class SparkDB:
             body["params"] = params
         return self._request("POST", "/query", json=body)
 
-    def transaction(self, queries, database="main"):
-        """Execute multiple queries in a transaction."""
+    def _transaction(self, queries, database="main"):
+        """Execute multiple queries in a transaction (direct API call)."""
         body = {"queries": queries, "database": database}
         return self._request("POST", "/transaction", json=body)
 
@@ -382,6 +388,44 @@ class SparkDB:
             avg/P99 latency, goroutines, memory, per-database sizes.
         """
         return self._request("GET", "/stats")
+
+    @contextmanager
+    def transaction(self, database="main"):
+        """Context manager that collects queries and sends them as a transaction.
+
+        Queries are buffered and sent atomically to
+        ``POST /transaction`` on successful exit.  If the body raises
+        the collected queries are discarded.
+
+        Yields
+        ------
+        callable
+            A function ``add(sql)`` that appends a SQL string to the
+            pending batch.
+
+        Examples
+        --------
+        >>> with db.transaction() as add:
+        ...     add("INSERT INTO t (v) VALUES (1)")
+        ...     add("INSERT INTO t (v) VALUES (2)")
+        """
+        queries = []
+
+        def add(sql):
+            queries.append(sql)
+
+        yield add
+        self._transaction(queries, database=database)
+
+    def health_model(self):
+        """Return server health as a typed :class:`m.HealthStatus`."""
+        return m.HealthStatus(**self.health())
+
+    def stats_model(self):
+        """Return server statistics as a typed :class:`m.ServerStats`."""
+        raw = self.stats()
+        dbs = [m.DatabaseInfo(**db) for db in raw.get("databases", [])]
+        return m.ServerStats(**{k: v for k, v in raw.items() if k != "databases"}, databases=dbs)
 
     def close(self):
         """Close the underlying HTTP session."""
