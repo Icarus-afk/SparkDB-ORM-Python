@@ -4,8 +4,11 @@ Each field class is a Python descriptor that handles validation,
 type coercion, and SQL type mapping.
 """
 
+import binascii
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from decimal import Decimal as _Decimal
+from uuid import UUID as _UUID
 
 from sparkdb.exceptions import ValidationError
 
@@ -278,3 +281,174 @@ class JSON(Field):
                 json.dumps(value)
             except (TypeError, ValueError) as e:
                 raise ValidationError(f"{self._name} is not JSON serializable: {e}") from e
+
+
+class BLOB(Field):
+    """Binary field mapped to ``BLOB``.
+
+    Accepts ``bytes``. Values are hex-encoded for SQL transmission
+    and decoded back on read.
+    """
+
+    def sql_type(self):
+        return "BLOB"
+
+    def to_db(self, value):
+        if value is None:
+            return None
+        if isinstance(value, bytes):
+            return binascii.hexlify(value).decode("ascii")
+        raise ValidationError(f"{self._name} must be bytes")
+
+    def from_db(self, value):
+        if value is None:
+            return None
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, str):
+            return binascii.unhexlify(value)
+        return value
+
+    def validate(self, value):
+        super().validate(value)
+        if value is not None and not isinstance(value, (bytes, bytearray)):
+            raise ValidationError(f"{self._name} must be bytes")
+
+
+class Date(Field):
+    """Date field stored as ISO-8601 ``TEXT`` (``YYYY-MM-DD``).
+
+    Maps to/from ``datetime.date``.
+    """
+
+    def sql_type(self):
+        return "TEXT"
+
+    def to_db(self, value):
+        if value is None:
+            return None
+        if isinstance(value, date) and not isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, str):
+            return value
+        raise ValidationError(f"{self._name} must be a date object")
+
+    def from_db(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return date.fromisoformat(value)
+        return value
+
+    def validate(self, value):
+        super().validate(value)
+        if value is not None and not isinstance(value, date):
+            raise ValidationError(f"{self._name} must be a date object")
+
+
+class Time(Field):
+    """Time field stored as ISO-8601 ``TEXT`` (``HH:MM:SS``).
+
+    Maps to/from ``datetime.time``.
+    """
+
+    def sql_type(self):
+        return "TEXT"
+
+    def to_db(self, value):
+        if value is None:
+            return None
+        if isinstance(value, time):
+            return value.isoformat()
+        if isinstance(value, str):
+            return value
+        raise ValidationError(f"{self._name} must be a time object")
+
+    def from_db(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return time.fromisoformat(value)
+        return value
+
+    def validate(self, value):
+        super().validate(value)
+        if value is not None and not isinstance(value, time):
+            raise ValidationError(f"{self._name} must be a time object")
+
+
+class Decimal(Field):
+    """Fixed-precision decimal field stored as ``TEXT``.
+
+    Maps to/from ``decimal.Decimal``. Uses text storage to avoid
+    floating-point rounding errors.
+
+    Parameters
+    ----------
+    max_digits : int, optional
+        Maximum number of digits (not enforced at the ORM level).
+    decimal_places : int, optional
+        Number of decimal places (not enforced at the ORM level).
+    """
+
+    def __init__(self, max_digits=None, decimal_places=None, **kwargs):
+        super().__init__(**kwargs)
+        self.max_digits = max_digits
+        self.decimal_places = decimal_places
+
+    def sql_type(self):
+        return "TEXT"
+
+    def to_db(self, value):
+        if value is None:
+            return None
+        if isinstance(value, _Decimal):
+            return str(value)
+        if isinstance(value, (int, float)):
+            return str(_Decimal(str(value)))
+        if isinstance(value, str):
+            return value
+        raise ValidationError(f"{self._name} must be a decimal or number")
+
+    def from_db(self, value):
+        if value is None:
+            return None
+        if isinstance(value, (str, int, float)):
+            return _Decimal(str(value))
+        return value
+
+    def validate(self, value):
+        super().validate(value)
+        if value is not None and not isinstance(value, (_Decimal, int, float, str)):
+            raise ValidationError(f"{self._name} must be a decimal or number")
+
+
+class UUID(Field):
+    """UUID field stored as ``TEXT``.
+
+    Maps to/from ``uuid.UUID``.
+    """
+
+    def sql_type(self):
+        return "TEXT"
+
+    def to_db(self, value):
+        if value is None:
+            return None
+        if isinstance(value, _UUID):
+            return str(value)
+        if isinstance(value, str):
+            return value
+        raise ValidationError(f"{self._name} must be a UUID")
+
+    def from_db(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return _UUID(value)
+        return value
+
+    def validate(self, value):
+        super().validate(value)
+        if value is not None and not isinstance(value, (_UUID, str)):
+            raise ValidationError(f"{self._name} must be a UUID or string")

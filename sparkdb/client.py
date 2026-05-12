@@ -470,6 +470,19 @@ class SparkDB:
         yield add
         self._transaction(queries, database=database)
 
+    def metrics(self):
+        """Fetch Prometheus-formatted server metrics (no auth required).
+
+        Returns
+        -------
+        str
+            Plaintext Prometheus metrics output.
+        """
+        url = urljoin(self.url + "/", "metrics")
+        resp = self._session.get(url, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.text
+
     def health_model(self):
         """Return server health as a typed :class:`m.HealthStatus`."""
         return m.HealthStatus(**self.health())

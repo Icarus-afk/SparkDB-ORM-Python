@@ -4,7 +4,9 @@ import os
 import sqlite3
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from decimal import Decimal as _Decimal
+from uuid import UUID as _UUID
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -12,7 +14,8 @@ from sparkdb import Model, DBAPI2Backend, SparkDBBackend
 from sparkdb.backends import DatabaseBackend
 from sparkdb.exceptions import *
 from sparkdb.fields import (
-    String, Integer, Float, Boolean, DateTime, JSON, Text, Field
+    String, Integer, Float, Boolean, DateTime, JSON, Text, Field,
+    BLOB, Date, Time, Decimal, UUID
 )
 from sparkdb.expressions import Q, F, _parse_where_key, _build_where, _WHERE_OPS
 from sparkdb.relationship import ForeignKey, has_many, LazyRelation
@@ -2147,6 +2150,138 @@ class TestRelationshipCoverageDetail(unittest.TestCase):
         p = self.Parent.create(name="pk_test")
         key = p._prefetch_key_pk_children
         self.assertEqual(key, p.pk)
+
+
+class TestExtendedFieldTypes(unittest.TestCase):
+    """Tests for BLOB, Date, Time, Decimal, UUID fields."""
+
+    def setUp(self):
+        self.db = memory_db()
+
+    def test_blob_roundtrip(self):
+        tbl = unique_table("blob_test")
+        class M(Model):
+            data = BLOB(nullable=True)
+            class Meta:
+                database = self.db
+                table = tbl
+        M.create_table()
+        blob = b"hello\x00world\xff"
+        inst = M.create(data=blob)
+        loaded = M.find(inst.pk)
+        self.assertEqual(loaded.data, blob)
+
+    def test_blob_none(self):
+        f = BLOB()
+        self.assertIsNone(f.to_db(None))
+        self.assertIsNone(f.from_db(None))
+
+    def test_blob_validation(self):
+        f = BLOB()
+        f._name = "data"
+        with self.assertRaises(ValidationError):
+            f.to_db("not bytes")
+
+    def test_date_roundtrip(self):
+        tbl = unique_table("date_test")
+        class M(Model):
+            d = Date(nullable=True)
+            class Meta:
+                database = self.db
+                table = tbl
+        M.create_table()
+        dt = date(2025, 12, 25)
+        inst = M.create(d=dt)
+        loaded = M.find(inst.pk)
+        self.assertEqual(loaded.d, dt)
+
+    def test_date_none(self):
+        f = Date()
+        self.assertIsNone(f.to_db(None))
+        self.assertIsNone(f.from_db(None))
+
+    def test_date_from_db_str(self):
+        f = Date()
+        result = f.from_db("2025-12-25")
+        self.assertEqual(result, date(2025, 12, 25))
+
+    def test_date_validation(self):
+        f = Date()
+        f._name = "d"
+        with self.assertRaises(ValidationError):
+            f.to_db(42)
+
+    def test_time_roundtrip(self):
+        tbl = unique_table("time_test")
+        class M(Model):
+            t = Time(nullable=True)
+            class Meta:
+                database = self.db
+                table = tbl
+        M.create_table()
+        tm = time(14, 30, 0)
+        inst = M.create(t=tm)
+        loaded = M.find(inst.pk)
+        self.assertEqual(loaded.t, tm)
+
+    def test_time_none(self):
+        f = Time()
+        self.assertIsNone(f.to_db(None))
+        self.assertIsNone(f.from_db(None))
+
+    def test_time_from_db_str(self):
+        f = Time()
+        result = f.from_db("14:30:00")
+        self.assertEqual(result, time(14, 30, 0))
+
+    def test_decimal_roundtrip(self):
+        tbl = unique_table("dec_test")
+        class M(Model):
+            val = Decimal(max_digits=10, decimal_places=2, nullable=True)
+            class Meta:
+                database = self.db
+                table = tbl
+        M.create_table()
+        d = _Decimal("123.45")
+        inst = M.create(val=d)
+        loaded = M.find(inst.pk)
+        self.assertEqual(loaded.val, d)
+
+    def test_decimal_from_int_float(self):
+        f = Decimal()
+        self.assertEqual(f.to_db(42), "42")
+        self.assertEqual(f.to_db(3.14), "3.14")
+        result = f.from_db("42")
+        self.assertEqual(result, _Decimal("42"))
+
+    def test_decimal_none(self):
+        f = Decimal()
+        self.assertIsNone(f.to_db(None))
+        self.assertIsNone(f.from_db(None))
+
+    def test_uuid_roundtrip(self):
+        tbl = unique_table("uuid_test")
+        class M(Model):
+            uid = UUID(nullable=True)
+            class Meta:
+                database = self.db
+                table = tbl
+        M.create_table()
+        u = _UUID("550e8400-e29b-41d4-a716-446655440000")
+        inst = M.create(uid=u)
+        loaded = M.find(inst.pk)
+        self.assertEqual(loaded.uid, u)
+
+    def test_uuid_from_str(self):
+        f = UUID()
+        f._name = "uid"
+        val = f.to_db("550e8400-e29b-41d4-a716-446655440000")
+        self.assertEqual(val, "550e8400-e29b-41d4-a716-446655440000")
+
+    def test_uuid_none(self):
+        f = UUID()
+        self.assertIsNone(f.to_db(None))
+        self.assertIsNone(f.from_db(None))
 
 
 class TestInitImports(unittest.TestCase):

@@ -60,6 +60,11 @@ All field types support common keyword arguments:
 | `Float`   | `REAL`       | `float` |
 | `Boolean` | `INTEGER`    | `bool` (accepts `0`/`1`) |
 | `DateTime` | `TEXT`      | `datetime` (ISO format) |
+| `Date`    | `TEXT`       | `datetime.date` (``YYYY-MM-DD``) |
+| `Time`    | `TEXT`       | `datetime.time` (``HH:MM:SS``) |
+| `Decimal` | `TEXT`       | `decimal.Decimal` |
+| `UUID`    | `TEXT`       | `uuid.UUID` |
+| `BLOB`    | `BLOB`       | `bytes` |
 | `JSON`    | `TEXT`       | `dict`/`list` (serialized) |
 
 ### Auto-increment
@@ -162,8 +167,11 @@ qs = User.where(age__lt=30)                # <
 qs = User.where(age__lte=30)               # <=
 qs = User.where(name__ne="Alice")          # !=
 qs = User.where(name__contains="li")       # LIKE '%li%'
+qs = User.where(name__icontains="li")      # LIKE '%li%' (case-insensitive)
 qs = User.where(name__startswith="A")      # LIKE 'A%'
+qs = User.where(name__istartswith="a")     # LIKE 'a%' (case-insensitive)
 qs = User.where(name__endswith="ce")       # LIKE '%ce'
+qs = User.where(name__iendswith="CE")      # LIKE '%ce' (case-insensitive)
 qs = User.where(age__in=[20, 30, 40])      # IN (...)
 qs = User.where(age__not_in=[20, 30])      # NOT IN (...)
 qs = User.where(name__isnull=True)         # IS NULL
@@ -274,6 +282,17 @@ User.where_raw("\"age\" > ?", 18).all()
 ```python
 User.where(name="Alice").exists()
 ```
+
+### Debug
+
+Print the generated SQL without executing:
+
+```python
+qs = User.where(name__contains="li").debug().all()
+# [SQL] SELECT * FROM "users" WHERE "name" LIKE ?  params=['%li%']
+```
+
+Also works with `.debug().sum()`, `.debug().delete()`, etc.
 
 ### Delete via QuerySet
 
