@@ -13,8 +13,9 @@ from sparkdb.migration import Migrator
 from sparkdb.query import QuerySet
 
 try:
-    from sparkdb.client import SparkDB
+    from sparkdb.client import SparkDB, AdminNamespace
 except ImportError:
     SparkDB = None
+    AdminNamespace = None
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

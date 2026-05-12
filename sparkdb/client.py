@@ -6,7 +6,6 @@ over REST.  This module requires ``requests`` (installed via the
 """
 
 import json
-import re
 import time
 from urllib.parse import urljoin
 
@@ -15,33 +14,100 @@ import requests
 from sparkdb.exceptions import *
 
 
-def _quote_sql(val):
-    if val is None:
-        return "NULL"
-    if isinstance(val, bool):
-        return "1" if val else "0"
-    if isinstance(val, int):
-        return str(val)
-    if isinstance(val, float):
-        return str(val)
-    s = str(val)
-    s = s.replace("'", "''")
-    return f"'{s}'"
+class AdminNamespace:
+    """Namespace for admin-only operations on the SparkDB server.
 
+    Accessed via ``client.admin``. All methods require admin or
+    appropriate role-level permissions.
+    """
 
-def _inline_params(sql, params):
-    if params is None:
-        return sql
-    if not isinstance(params, (list, tuple)):
-        params = [params]
-    parts = sql.split("?")
-    if len(parts) - 1 != len(params):
-        if len(parts) - 1 != len(params):
-            raise ValueError(f"expected {len(parts)-1} params, got {len(params)}")
-    result = parts[0]
-    for i, p in enumerate(params):
-        result += _quote_sql(p) + parts[i + 1]
-    return result
+    def __init__(self, client):
+        self._client = client
+
+    def create_user(self, username, password, role):
+        """Create a new database user (admin only).
+
+        Parameters
+        ----------
+        username : str
+        password : str
+            Must meet password strength requirements (8+ chars,
+            uppercase, lowercase, digit).
+        role : str
+            One of ``admin``, ``developer``, ``readonly``, ``auditor``.
+
+        Returns
+        -------
+        dict
+            ``{"id": ..., "username": ..., "role": ...}``
+        """
+        return self._client._request("POST", "/admin/users", json={
+            "username": username, "password": password, "role": role,
+        })
+
+    def list_users(self):
+        """List all database users (admin only).
+
+        Returns
+        -------
+        dict
+            ``{"users": [...]}``
+        """
+        return self._client._request("GET", "/admin/users")
+
+    def set_user_role(self, user_id, role):
+        """Change a user's role (admin only).
+
+        Parameters
+        ----------
+        user_id : int
+        role : str
+        """
+        return self._client._request(
+            "PUT", f"/admin/users/{user_id}/role", json={"role": role},
+        )
+
+    def set_username(self, user_id, username):
+        """Change a user's username (admin only)."""
+        return self._client._request(
+            "PUT", f"/admin/users/{user_id}/username", json={"username": username},
+        )
+
+    def reset_password(self, user_id, password):
+        """Admin-reset a user's password (admin only).
+
+        Triggers ``password_change_required`` on the user's next login.
+        """
+        return self._client._request(
+            "PUT", f"/admin/users/{user_id}/password", json={"password": password},
+        )
+
+    def delete_user(self, user_id):
+        """Delete a user (admin only). Cannot delete yourself.
+
+        Returns
+        -------
+        dict
+            ``{"message": "user deleted"}``
+        """
+        return self._client._request("DELETE", f"/admin/users/{user_id}")
+
+    def audit_logs(self, limit=100):
+        """View audit logs (admin/auditor).
+
+        Parameters
+        ----------
+        limit : int
+            Maximum number of log entries to return.
+
+        Returns
+        -------
+        dict
+            ``{"logs": [...]}``
+        """
+        return self._client._request(
+            "GET", "/admin/audit-logs", params={"limit": limit},
+        )
 
 
 class SparkDB:
@@ -66,6 +132,8 @@ class SparkDB:
         self.timeout = timeout
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
+        self._password_change_required = False
+        self.admin = AdminNamespace(self)
 
         if api_key:
             self._session.headers.update({"X-API-Key": api_key})
@@ -77,6 +145,11 @@ class SparkDB:
             raise ValueError("both username and password are required for authentication")
         else:
             self._token = None
+
+    @property
+    def needs_password_change(self):
+        """Whether the server requires a password change on next login."""
+        return self._password_change_required
 
     def _request(self, method, path, **kwargs):
         url = urljoin(self.url + "/", path.lstrip("/"))
@@ -111,17 +184,52 @@ class SparkDB:
         token = data.get("token")
         if not token:
             raise AuthenticationError("login response missing token")
+        self._password_change_required = data.get("password_change_required", False)
         return token
+
+    def change_password(self, old_password, new_password):
+        """Change the authenticated user's password.
+
+        Parameters
+        ----------
+        old_password : str
+        new_password : str
+            Must meet password strength requirements (8+ chars,
+            uppercase, lowercase, digit).
+
+        Returns
+        -------
+        dict
+            ``{"message": "password changed"}``
+        """
+        result = self._request("PUT", "/auth/password", json={
+            "old_password": old_password, "new_password": new_password,
+        })
+        self._password_change_required = False
+        return result
 
     def query(self, sql, params=None, database="main"):
         """Execute a query on the SparkDB server.
 
-        Parameters are inlined into the SQL before sending (the
-        SparkDB server does not currently support server-side
-        parameter binding).
+        Uses server-side parameter binding via the ``params`` array.
+
+        Parameters
+        ----------
+        sql : str
+            SQL string with ``?`` placeholders.
+        params : list, optional
+            Values to bind to placeholders.
+        database : str
+            Target database name (default ``"main"``).
+
+        Returns
+        -------
+        dict
+            ``{"columns": [...], "rows": [[...], ...], "time": "..."}``
         """
-        sql = _inline_params(sql, params)
         body = {"query": sql, "database": database}
+        if params is not None:
+            body["params"] = params
         return self._request("POST", "/query", json=body)
 
     def transaction(self, queries, database="main"):
@@ -129,20 +237,150 @@ class SparkDB:
         body = {"queries": queries, "database": database}
         return self._request("POST", "/transaction", json=body)
 
+    def create_api_key(self, name):
+        """Create a new API key (admin only).
+
+        Parameters
+        ----------
+        name : str
+            A label for the key.
+
+        Returns
+        -------
+        dict
+            ``{"api_key": "vl_...", "name": "..."}``
+            The full key is only shown once.
+        """
+        return self._request("POST", "/auth/api-keys", json={"name": name})
+
+    def list_api_keys(self):
+        """List all API keys (admin only).
+
+        Returns
+        -------
+        dict
+            ``{"api_keys": [...]}``
+        """
+        return self._request("GET", "/auth/api-keys")
+
+    def delete_api_key(self, key_id):
+        """Delete an API key (admin only).
+
+        Parameters
+        ----------
+        key_id : int
+        """
+        return self._request("DELETE", f"/auth/api-keys/{key_id}")
+
+    def reveal_api_key(self, key_id, password):
+        """Re-display a full API key (requires account password).
+
+        Parameters
+        ----------
+        key_id : int
+        password : str
+            The authenticated user's password.
+
+        Returns
+        -------
+        dict
+            ``{"api_key": "vl_..."}``
+        """
+        return self._request("POST", f"/auth/api-keys/{key_id}/reveal", json={
+            "password": password,
+        })
+
     def create_database(self, name):
-        """Create a new database on the server."""
+        """Create a new database on the server.
+
+        .. deprecated::
+            Use POST /databases directly. The server supports database
+            creation implicitly through query execution.
+        """
         return self._request("POST", "/databases", json={"name": name})
 
     def list_databases(self):
-        """List all databases on the server."""
+        """List all databases on the server.
+
+        Returns
+        -------
+        dict
+            ``{"databases": ["main", ...]}``
+        """
         return self._request("GET", "/databases")
 
+    def backup(self, database="main"):
+        """Create a backup of a database (admin only).
+
+        Parameters
+        ----------
+        database : str
+            Database name to back up (default ``"main"``).
+
+        Returns
+        -------
+        dict
+            Backup info with name, size, database, and created_at.
+        """
+        return self._request("POST", "/backup", json={"database": database})
+
+    def list_backups(self):
+        """List all available backups (admin only).
+
+        Returns
+        -------
+        dict
+            ``{"backups": [...]}``
+        """
+        return self._request("GET", "/backups")
+
+    def delete_backup(self, name):
+        """Delete a specific backup by name (admin only).
+
+        Parameters
+        ----------
+        name : str
+            Backup name as returned by :meth:`list_backups`.
+        """
+        return self._request("DELETE", f"/backups/{name}")
+
+    def restore(self, backup_file, database="main"):
+        """Restore a database from a backup file (admin only).
+
+        Parameters
+        ----------
+        backup_file : str
+        database : str
+            Target database name (default ``"main"``).
+
+        Returns
+        -------
+        dict
+            ``{"message": "restore completed", "database": "..."}``
+        """
+        return self._request("POST", "/restore", json={
+            "backup_file": backup_file, "database": database,
+        })
+
     def health(self):
-        """Check server health."""
+        """Check server health.
+
+        Returns
+        -------
+        dict
+            ``{"status": "ok", "checks": {"database": "ok"}}``
+        """
         return self._request("GET", "/health")
 
     def stats(self):
-        """Get server statistics."""
+        """Get server statistics (admin/auditor).
+
+        Returns
+        -------
+        dict
+            Uptime, total queries, failed logins, active connections,
+            avg/P99 latency, goroutines, memory, per-database sizes.
+        """
         return self._request("GET", "/stats")
 
     def close(self):
