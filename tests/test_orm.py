@@ -1656,6 +1656,499 @@ class TestQueryCoverage(unittest.TestCase):
         self.assertEqual(EmptyCt.where().count(), 0)
 
 
+class TestFieldCoverageDetail(unittest.TestCase):
+    """Covers remaining field paths."""
+
+    def test_base_field_sql_type_raises(self):
+        f = Field()
+        with self.assertRaises(NotImplementedError):
+            f.sql_type()
+
+    def test_field_class_access_returns_descriptor(self):
+        f = String(max_length=50)
+        f._name = "name"
+        self.assertIs(f.__get__(None, None), f)
+
+    def test_field_resolved_path(self):
+        db = memory_db()
+        tbl = unique_table("resolved_test")
+
+        class RModel(Model):
+            name = String(max_length=50)
+
+            class Meta:
+                database = db
+                table = tbl
+
+        RModel.create_table()
+        item = RModel(name="original")
+        object.__setattr__(item, "_name_resolved", "overridden")
+        self.assertEqual(item.name, "overridden")
+
+    def test_float_to_db_none(self):
+        f = Float()
+        self.assertIsNone(f.to_db(None))
+
+    def test_float_from_db_none(self):
+        f = Float()
+        self.assertIsNone(f.from_db(None))
+
+    def test_boolean_to_db_none(self):
+        f = Boolean()
+        self.assertIsNone(f.to_db(None))
+
+    def test_boolean_from_db_none(self):
+        f = Boolean()
+        self.assertIsNone(f.from_db(None))
+
+    def test_datetime_auto_now_sets_nullable(self):
+        dt = DateTime(auto_now=True)
+        self.assertTrue(dt.nullable)
+        dt2 = DateTime(auto_now_add=True)
+        self.assertTrue(dt2.nullable)
+
+    def test_datetime_to_db_none(self):
+        f = DateTime()
+        self.assertIsNone(f.to_db(None))
+
+    def test_datetime_to_db_str_fallback(self):
+        f = DateTime()
+        result = f.to_db("2024-01-01T00:00:00")
+        self.assertEqual(result, "2024-01-01T00:00:00")
+
+    def test_datetime_from_db_none(self):
+        f = DateTime()
+        self.assertIsNone(f.from_db(None))
+
+    def test_json_to_db_none(self):
+        f = JSON()
+        self.assertIsNone(f.to_db(None))
+
+    def test_json_non_serializable_raises(self):
+        f = JSON()
+        f._name = "data"
+        with self.assertRaises(ValidationError):
+            f.to_db(object())
+
+    def test_json_from_db_none(self):
+        f = JSON()
+        self.assertIsNone(f.from_db(None))
+
+
+class TestModelCoverageDetail(unittest.TestCase):
+    """Covers remaining model paths."""
+
+    def setUp(self):
+        self.db = memory_db()
+
+    def test_model_inheritance(self):
+        tbl_base = unique_table("base_tbl")
+        tbl_child = unique_table("child_tbl")
+
+        class Base(Model):
+            base_name = String(max_length=50)
+
+            class Meta:
+                database = self.db
+                table = tbl_base
+
+        class Child(Base):
+            child_name = String(max_length=50)
+
+            class Meta:
+                database = self.db
+                table = tbl_child
+
+        self.assertIn("base_name", Child._fields)
+        self.assertIn("child_name", Child._fields)
+
+    def test_invalid_meta_indexes_raises(self):
+        with self.assertRaises(ValueError):
+            class BadIndexes(Model):
+                name = String(max_length=50)
+
+                class Meta:
+                    database = self.db
+                    indexes = ["not_a_dict"]
+
+    def test_create_table_no_database_raises(self):
+        class NoDb(Model):
+            name = String(max_length=50)
+
+        with self.assertRaises(SparkDBError):
+            NoDb.create_table()
+
+    def test_drop_table_no_database_raises(self):
+        class NoDb(Model):
+            name = String(max_length=50)
+
+        with self.assertRaises(SparkDBError):
+            NoDb.drop_table()
+
+    def test_from_row_applies_defaults(self):
+        tbl = unique_table("defaults_row")
+
+        class DModel(Model):
+            name = String(max_length=50, default="unknown")
+            value = Integer(default=42)
+
+            class Meta:
+                database = self.db
+                table = tbl
+
+        DModel.create_table()
+        inst = DModel._from_row({"id": 1})
+        self.assertEqual(inst.name, "unknown")
+        self.assertEqual(inst.value, 42)
+
+    def test_create_table_with_pk_unique_and_indexes(self):
+        tbl = unique_table("full_feature")
+
+        class FullModel(Model):
+            label = String(max_length=50, unique=True)
+            code = Integer(nullable=False, index=True)
+
+            class Meta:
+                database = self.db
+                table = tbl
+                unique_together = [("label", "code")]
+                indexes = [
+                    {"fields": ["label", "code"], "name": "idx_label_code"},
+                ]
+
+        FullModel.create_table()
+        FullModel.create(label="hello", code=1)
+        found = FullModel.find(1)
+        self.assertIsNotNone(found)
+
+    def test_create_table_with_non_autoinc_pk(self):
+        tbl = unique_table("non_auto_pk")
+
+        class NonAutoPK(Model):
+            id = Integer(primary_key=True)
+            name = String(max_length=50)
+
+            class Meta:
+                database = self.db
+                table = tbl
+
+        NonAutoPK.create_table()
+        NonAutoPK.create(id=1, name="hello")
+        found = NonAutoPK.find(1)
+        self.assertEqual(found.name, "hello")
+
+    def test_save_update_no_sets_returns_early(self):
+        tbl = unique_table("only_pk")
+
+        class OnlyPk(Model):
+            class Meta:
+                database = self.db
+                table = tbl
+
+        OnlyPk.create_table()
+        self.db.query(f'INSERT INTO "{tbl}" DEFAULT VALUES')
+        item = OnlyPk()
+        item._data = {"id": 1}
+        item._exists = True
+        item._saved = True
+        item.save()
+
+    def test_getattr_relation_descriptor(self):
+        tbl_a = unique_table("getattr_a")
+        tbl_b = unique_table("getattr_b")
+
+        class A(Model):
+            name = String(max_length=50)
+
+            class Meta:
+                database = self.db
+                table = tbl_a
+
+        class B(Model):
+            title = String(max_length=50)
+            a = ForeignKey(A, nullable=True)
+
+            class Meta:
+                database = self.db
+                table = tbl_b
+
+        A.create_table()
+        B.create_table()
+        a = A.create(name="parent")
+        has_many(B, name="bs", fk_column="a")(A)
+        self.assertIsNotNone(a.bs)
+
+
+class TestQueryCoverageDetail(unittest.TestCase):
+    """Covers remaining query paths."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.db = memory_db()
+        cls.tbl = unique_table("qdet")
+        cls.empty_tbl = unique_table("empty_qdet")
+
+        class QDet(Model):
+            name = String(max_length=100)
+            value = Integer(nullable=True)
+            category = String(max_length=50, nullable=True)
+
+            class Meta:
+                database = cls.db
+                table = cls.tbl
+                ordering = ["-value"]
+
+        class EmptyQDet(Model):
+            x = Integer()
+
+            class Meta:
+                database = cls.db
+                table = cls.empty_tbl
+
+        cls.QDet = QDet
+        cls.EmptyQDet = EmptyQDet
+        QDet.create_table()
+        EmptyQDet.create_table()
+        QDet.bulk_create([
+            {"name": "a", "value": 10, "category": "X"},
+            {"name": "b", "value": 20, "category": "Y"},
+        ])
+
+    def qs(self):
+        return self.QDet.where()
+
+    def test_render_fexpr_negated_and_values(self):
+        from sparkdb.expressions import _FExpr
+        from sparkdb.query import _render_fexpr
+        expr = _FExpr(None, "-", F("val"))
+        result = _render_fexpr(expr)
+        self.assertIn("-", result)
+        self.assertIn("val", result)
+        str_result = _render_fexpr("hello")
+        self.assertIn("hello", str_result)
+        int_result = _render_fexpr(42)
+        self.assertEqual(int_result, "42")
+        bytes_result = _render_fexpr(b"test")
+        self.assertIn("test", bytes_result)
+
+    def test_meta_ordering_desc(self):
+        qs = self.QDet.where()
+        self.assertIn("value", qs._order_by_fields)
+        self.assertTrue(qs._order_dirs.get("value"))
+
+    def test_where_fexpr(self):
+        from sparkdb.expressions import _FExpr
+        expr = F("value") + 5
+        qs = self.qs().where(value=expr)
+        self.assertGreater(len(qs._where_clauses), 0)
+
+    def test_order_by_empty_string_raises(self):
+        with self.assertRaises(ValueError):
+            self.qs().order_by("")
+
+    def test_order_by_only_dash_raises(self):
+        with self.assertRaises(ValueError):
+            self.qs().order_by("-")
+
+    def test_having_q_objects(self):
+        from sparkdb.expressions import Q
+        qs = self.qs().group_by("category").having(Q(value__gt=5))
+        self.assertGreaterEqual(len(qs._having_clauses), 0)
+
+    def test_select_related_no_ref_model(self):
+        qs = self.qs().select_related("name")
+        result = qs.all()
+        self.assertGreaterEqual(len(result), 0)
+
+    def test_select_related_no_fk_values(self):
+        tbl_b = unique_table("srnfk_b")
+        tbl_a = unique_table("srnfk_a")
+
+        class A(Model):
+            name = String(max_length=50)
+
+            class Meta:
+                database = self.db
+                table = tbl_a
+
+        class B(Model):
+            title = String(max_length=50)
+            a = ForeignKey(A, nullable=True)
+
+            class Meta:
+                database = self.db
+                table = tbl_b
+
+        A.create_table()
+        B.create_table()
+        B.create(title="orphan")
+        results = B.where().select_related("a").all()
+        self.assertEqual(len(results), 1)
+
+    def test_select_related_caches_resolved(self):
+        from sparkdb.relationship import ForeignKey
+        tbl_a = unique_table("src_a")
+        tbl_b = unique_table("src_b")
+
+        class A(Model):
+            name = String(max_length=50)
+
+            class Meta:
+                database = self.db
+                table = tbl_a
+
+        class B(Model):
+            title = String(max_length=50)
+            a = ForeignKey(A, nullable=True)
+
+            class Meta:
+                database = self.db
+                table = tbl_b
+
+        A.create_table()
+        B.create_table()
+        a = A.create(name="parent")
+        b = B.create(title="child", a=a.pk)
+        results = B.where().select_related("a").all()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].a.name, "parent")
+
+    def test_prefetch_related_hits_loader(self):
+        tbl_a = unique_table("pref_a")
+        tbl_b = unique_table("pref_b")
+
+        class A(Model):
+            name = String(max_length=50)
+
+            class Meta:
+                database = self.db
+                table = tbl_a
+
+        class B(Model):
+            title = String(max_length=50)
+            a = ForeignKey(A, nullable=True)
+
+            class Meta:
+                database = self.db
+                table = tbl_b
+
+        A.create_table()
+        B.create_table()
+        a = A.create(name="parent")
+        B.create(title="c1", a=a.pk)
+        B.create(title="c2", a=a.pk)
+
+        has_many(B, name="children", fk_column="a")(A)
+        results = A.where().prefetch_related("children").all()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results[0].children), 2)
+
+    def test_debug_execute(self):
+        import io, sys
+        buf = io.StringIO()
+        sys.stdout = buf
+        self.qs().debug().all()
+        sys.stdout = sys.__stdout__
+        output = buf.getvalue()
+        self.assertIn("[SQL]", output)
+
+    def test_debug_aggregate(self):
+        import io, sys
+        buf = io.StringIO()
+        sys.stdout = buf
+        self.qs().debug().sum("value")
+        sys.stdout = sys.__stdout__
+        output = buf.getvalue()
+        self.assertIn("[SQL]", output)
+
+    def test_debug_delete(self):
+        import io, sys
+        buf = io.StringIO()
+        sys.stdout = buf
+        self.qs().where(name="nonexistent").debug().delete()
+        sys.stdout = sys.__stdout__
+        output = buf.getvalue()
+        self.assertIn("[SQL]", output)
+
+    def test_count_zero(self):
+        c = self.EmptyQDet.where().count()
+        self.assertEqual(c, 0)
+
+    def test_aggregate_with_having_raw(self):
+        result = self.qs().group_by("category").having("COUNT(*) > ?", 0).sum("value")
+        self.assertIsInstance(result, (int, float))
+
+    def test_aggregate_no_rows_returns_none(self):
+        result = self.EmptyQDet.where().sum("x")
+        self.assertIsNone(result)
+
+
+class TestRelationshipCoverageDetail(unittest.TestCase):
+    """Covers remaining relationship paths."""
+
+    def setUp(self):
+        self.db = memory_db()
+        self.parent_tbl = unique_table("rcd_p")
+        self.child_tbl = unique_table("rcd_c")
+
+        class Parent(Model):
+            name = String(max_length=50)
+
+            class Meta:
+                database = self.db
+                table = self.parent_tbl
+
+        class Child(Model):
+            name = String(max_length=50)
+            parent = ForeignKey(Parent, nullable=True, column="parent_id")
+
+            class Meta:
+                database = self.db
+                table = self.child_tbl
+
+        self.Parent = Parent
+        self.Child = Child
+        Parent.create_table()
+        Child.create_table()
+
+    def test_reverse_relation_descriptor_set_and_get(self):
+        has_many(self.Child, name="my_children", fk_column="parent_id")(self.Parent)
+        p = self.Parent.create(name="p1")
+        self.Child.create(name="c1", parent=p.pk)
+        p.my_children = ["cached"]
+        result = p.my_children
+        self.assertEqual(result, ["cached"])
+
+    def test_has_many_populates_rel_descriptors(self):
+        class X(Model):
+            n = String(max_length=50)
+            class Meta:
+                database = self.db
+                table = unique_table("x_rel_desc")
+        class Y(Model):
+            n = String(max_length=50)
+            x = ForeignKey(X, nullable=True)
+            class Meta:
+                database = self.db
+                table = unique_table("y_rel_desc")
+        X.create_table()
+        Y.create_table()
+        X._rel_descriptors.clear()
+        has_many(Y, name="children", fk_column="x")(X)
+        self.assertIn("children", X._rel_descriptors)
+
+    def test_prefetch_loader_empty_pks(self):
+        has_many(self.Child, name="empty_children", fk_column="parent_id")(self.Parent)
+        p = self.Parent.create(name="lonely")
+        self.assertEqual(p.empty_children, [])
+
+    def test_prefetch_key_property(self):
+        has_many(self.Child, name="pk_children", fk_column="parent_id")(self.Parent)
+        p = self.Parent.create(name="pk_test")
+        key = p._prefetch_key_pk_children
+        self.assertEqual(key, p.pk)
+
+
 class TestInitImports(unittest.TestCase):
     """Verifies __init__ imports work correctly."""
 

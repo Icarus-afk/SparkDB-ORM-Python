@@ -101,6 +101,14 @@ class TestSparkDBInit(unittest.TestCase):
         with self.assertRaises(AuthenticationError):
             SparkDB(username="admin", password="wrong")
 
+    @patch("requests.Session")
+    def test_login_response_missing_token(self, mock_session):
+        session = mock_session.return_value
+        resp = _mock_response({"id": 1}, status_code=200)
+        session.request.return_value = resp
+        with self.assertRaises(AuthenticationError):
+            SparkDB(username="admin", password="admin")
+
 
 class TestSparkDBRequest(unittest.TestCase):
 
@@ -402,7 +410,7 @@ class TestSparkDBInfoMethods(unittest.TestCase):
     def test_stats_model(self):
         self.mock_session.request.return_value = _mock_response({
             "uptime_seconds": 3600, "total_queries": 100, "failed_logins": 0,
-            "active_connections": 1, "avg_latency_ms": 1.5, "p99_latency_ms": 5.0,
+            "active_connections": 1, "avg_query_latency_ms": 1.5, "p99_query_latency_ms": 5.0,
             "goroutines": 5, "alloc_mb": 10.0,
             "databases": [{"name": "main", "size": 4096}],
         })

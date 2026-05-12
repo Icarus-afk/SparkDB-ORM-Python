@@ -49,10 +49,11 @@ class ServerStats:
     total_queries: int = 0
     failed_logins: int = 0
     active_connections: int = 0
-    avg_latency_ms: float = 0.0
-    p99_latency_ms: float = 0.0
+    avg_query_latency_ms: float = 0.0
+    p99_query_latency_ms: float = 0.0
     goroutines: int = 0
     alloc_mb: float = 0.0
+    sys_mb: float = 0.0
     databases: list[DatabaseInfo] = field(default_factory=list)
 
 

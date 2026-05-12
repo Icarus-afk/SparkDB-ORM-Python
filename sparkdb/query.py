@@ -373,8 +373,10 @@ class QuerySet:
             ref_map = {r.pk: r for r in refs}
             for inst in instances:
                 val = inst._data.get(fk_name)
-                if val is not None and val in ref_map:
-                    object.__setattr__(inst, f"_{fk_name}_resolved", ref_map[val])
+                if val is not None:
+                    db_val = field_obj.to_db(val)
+                    if db_val in ref_map:
+                        object.__setattr__(inst, f"_{fk_name}_resolved", ref_map[db_val])
 
     def _load_prefetch_related(self, instances):
         for rel_name in self._prefetch_related:
@@ -386,7 +388,14 @@ class QuerySet:
             key_attr = f"_prefetch_key_{rel_name}"
             for inst in instances:
                 key = getattr(inst, key_attr, inst.pk)
-                matched = [r for r in related if getattr(r, loader_fn.fk_column, None) == key]
+                rel_col = loader_fn.fk_column
+                matched = []
+                for r in related:
+                    r_val = getattr(r, rel_col, None)
+                    if rel_col in r._fields:
+                        r_val = r._fields[rel_col].to_db(r_val)
+                    if r_val == key:
+                        matched.append(r)
                 object.__setattr__(inst, f"_{rel_name}_cache", matched)
 
     def all(self):
